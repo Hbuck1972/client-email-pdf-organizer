@@ -202,7 +202,7 @@ def build_timeshare_records(
 
     client_name = extract_client_name(text, subject)
     owner_name = extract_owner_name(text, subject)
-    contract_number = extract_contract_number(text)
+    contract_number = extract_contract_number(subject + '\n' + text)
     resorts = extract_resort_names(text, subject, attachment_names)
 
     records = []
@@ -363,6 +363,203 @@ def make_record_folder(base_output: Path, record: TimeshareRecord) -> Path:
     folder_path = base_output / folder_name
     folder_path.mkdir(parents=True, exist_ok=True)
     return folder_path
+
+
+
+# --- YANNI SUBJECT PARSER OVERRIDES START ---
+
+def clean_subject_for_parsing(subject: str) -> str:
+    s = subject or ""
+    s = re.sub(r"^\s*(re|fw|fwd)\s*:\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def title_keep_ampersand(value: str) -> str:
+    value = re.sub(r"\s+", " ", value or "").strip(" -:_[]()")
+    small_words = {"and", "or", "of", "at", "the"}
+
+    parts = []
+    for token in value.split(" "):
+        if token == "&":
+            parts.append(token)
+        elif token.lower() in small_words:
+            parts.append(token.lower())
+        elif token.isupper() and len(token) <= 4:
+            parts.append(token)
+        else:
+            parts.append(token[:1].upper() + token[1:].lower())
+
+    return " ".join(parts).strip()
+
+
+def format_owner_last_first(name: str) -> str:
+    name = re.sub(r"\s+", " ", name or "").strip(" -:_[]()")
+    name = re.sub(r"\b(owner|client)\b\s*:?", "", name, flags=re.IGNORECASE).strip()
+
+    if not name:
+        return "UNKNOWN OWNER"
+
+    if "," in name:
+        left, right = name.split(",", 1)
+        return f"{title_keep_ampersand(left)}, {title_keep_ampersand(right)}".strip()
+
+    words = name.split()
+    if len(words) >= 2:
+        last = words[-1]
+        first = " ".join(words[:-1])
+        return f"{title_keep_ampersand(last)}, {title_keep_ampersand(first)}"
+
+    return title_keep_ampersand(name)
+
+
+def extract_owner_from_new_file_subject(subject: str) -> str:
+    s = clean_subject_for_parsing(subject)
+
+    m = re.search(r"\bNew\s*File\b\s*[-:]*\s*(.+)", s, flags=re.IGNORECASE)
+    if not m:
+        return ""
+
+    chunk = m.group(1).strip()
+
+    stop_patterns = [
+        r"\[",
+        r"\bWyndham\b",
+        r"\bBluegreen\b",
+        r"\bGrand Lodge\b",
+        r"\bVacation Village\b",
+        r"\bVillas At Regal Palm[s]?\b",
+        r"\bFrench Quarter\b",
+        r"\bSpinnaker\b",
+        r"\bHilton\b",
+        r"\bWestgate\b",
+        r"\bMarriott\b",
+        r"\bDiamond\b",
+        r"\bACA\b",
+        r"\bCONGRATULATIONS\b",
+        r"\bFOLLOW INSTRUCTIONS\b",
+        r"\bLETTER OF EXPLANATION\b",
+        r"\b\d{5,}\b",
+    ]
+
+    first_stop = len(chunk)
+    for pat in stop_patterns:
+        sm = re.search(pat, chunk, flags=re.IGNORECASE)
+        if sm:
+            first_stop = min(first_stop, sm.start())
+
+    return chunk[:first_stop].strip(" -:_[]()")
+
+
+def extract_owner_from_owner_id_subject(subject: str) -> str:
+    s = clean_subject_for_parsing(subject)
+    m = re.match(r"(.+?)-\s*Owner\s*ID\b", s, flags=re.IGNORECASE)
+    if not m:
+        return ""
+    return m.group(1).strip()
+
+
+def extract_client_name(text: str, subject: str) -> str:
+    combined = f"{subject}\n{text}"
+
+    if re.search(r"\bACA\b", combined, flags=re.IGNORECASE):
+        return "ACA"
+
+    if re.search(r"\bNew\s*File\b", subject or "", flags=re.IGNORECASE):
+        return "ACA"
+
+    return "UNKNOWN CLIENT"
+
+
+def extract_owner_name(text: str, subject: str) -> str:
+    combined = f"{subject}\n{text}"
+
+    owner = extract_owner_from_owner_id_subject(subject)
+    if owner:
+        return format_owner_last_first(owner)
+
+    owner = extract_owner_from_new_file_subject(subject)
+    if owner:
+        return format_owner_last_first(owner)
+
+    body_patterns = [
+        r"Owner(?:\s+Name)?\s*[:\-]\s*([A-Za-z ,.&'\-]+)",
+        r"Purchaser(?:\s+Name)?\s*[:\-]\s*([A-Za-z ,.&'\-]+)",
+        r"Client(?:\s+Name)?\s*[:\-]\s*([A-Za-z ,.&'\-]+)",
+    ]
+
+    for pat in body_patterns:
+        m = re.search(pat, combined, flags=re.IGNORECASE)
+        if m:
+            value = m.group(1).strip().splitlines()[0].strip()
+            if value and not re.search(r"\bACA\b", value, flags=re.IGNORECASE):
+                return format_owner_last_first(value)
+
+    return "UNKNOWN OWNER"
+
+
+def extract_contract_number(text: str) -> str:
+    combined = text or ""
+
+    patterns = [
+        r"Owner\s*ID\s*[:#\-]?\s*(\d{4,})",
+        r"Contract(?:\s+Number| #| No\.?)?\s*[:#\-]?\s*(\d{4,})",
+        r"Account(?:\s+Number| #| No\.?)?\s*[:#\-]?\s*(\d{4,})",
+        r"\[[^\]]*-\s*(\d{4,})\]",
+        r"\b(\d{5,})\b",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, combined, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+
+    return "UNKNOWN CONTRACT"
+
+
+def extract_resort_names(text: str, subject: str, filenames: List[str]) -> List[str]:
+    combined = subject + "\n" + text + "\n" + "\n".join(filenames)
+
+    known_resorts = {
+        "Wyndham": "Wyndham",
+        "Club Wyndham": "Wyndham",
+        "Bluegreen": "Bluegreen Vacations",
+        "Bluegreen Vacations": "Bluegreen Vacations",
+        "Spinnaker": "Spinnaker",
+        "Hilton Grand Vacations": "Hilton Grand Vacations",
+        "Hilton": "Hilton Grand Vacations",
+        "French Quarter": "French Quarter",
+        "Vacation Village": "Vacation Village",
+        "Grand Lodge": "Grand Lodge",
+        "Villas At Regal Palm": "Villas At Regal Palm",
+        "Villas At Regal Palms": "Villas At Regal Palm",
+        "Westgate": "Westgate Resorts",
+        "Marriott": "Marriott",
+        "Diamond Resorts": "Diamond Resorts",
+        "Diamond": "Diamond Resorts",
+    }
+
+    found = []
+
+    # Bracket format: [Bluegreen -2813075]
+    for bracket in re.findall(r"\[([^\]]+)\]", combined):
+        left = bracket.split("-")[0].strip()
+        for key, resort in known_resorts.items():
+            if re.search(rf"\b{re.escape(key)}\b", left, re.IGNORECASE):
+                if resort.upper() not in [x.upper() for x in found]:
+                    found.append(resort)
+
+    for key, resort in known_resorts.items():
+        if re.search(rf"\b{re.escape(key)}\b", combined, re.IGNORECASE):
+            if resort.upper() not in [x.upper() for x in found]:
+                found.append(resort)
+
+    if not found:
+        found.append("UNKNOWN TIMESHARE")
+
+    return found
+
+# --- YANNI SUBJECT PARSER OVERRIDES END ---
 
 
 def write_summary_files(folder: Path, record: TimeshareRecord, body_text: str):

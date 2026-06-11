@@ -4,15 +4,16 @@ import queue
 import threading
 import subprocess
 from pathlib import Path
+from datetime import datetime, timedelta
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 APP_DIR = Path(__file__).resolve().parent
 CLI_SCRIPT = APP_DIR / "yanni_email_app.py"
 
 DEFAULT_OUTPUT = r"C:\Users\buckl\OneDrive\Content\Yanni Email Project\Test Folder"
 DEFAULT_ACCOUNT = "tslegalaction@gmail.com"
-DEFAULT_QUERY = "has:attachment filename:pdf newer_than:30d"
+DEFAULT_QUERY = "has:attachment filename:pdf"
 DEFAULT_CREDENTIALS = "credentials.json"
 DEFAULT_TOKEN = "token-tslegalaction.json"
 
@@ -30,10 +31,16 @@ class YanniGuiApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Yanni Email PDF Organizer")
-        self.root.geometry("900x650")
+        self.root.geometry("980x700")
 
         self.log_queue = queue.Queue()
         self.running = False
+
+        current_year = datetime.now().year
+        self.year_options = [""] + [str(y) for y in range(current_year - 3, current_year + 4)]
+        self.month_options = [""] + [f"{m:02d}" for m in range(1, 13)]
+        self.day_options = [""] + [f"{d:02d}" for d in range(1, 32)]
+        self.hour_options = [""] + [f"{h:02d}" for h in range(0, 24)]
 
         self.expected_account = tk.StringVar(value=DEFAULT_ACCOUNT)
         self.gmail_query = tk.StringVar(value=DEFAULT_QUERY)
@@ -43,6 +50,16 @@ class YanniGuiApp:
         self.token_file = tk.StringVar(value=DEFAULT_TOKEN)
         self.connected_account = tk.StringVar(value="Not checked yet")
         self.mode_status = tk.StringVar(value="Mode: Gmail read-only / local PDF download only")
+
+        self.start_year = tk.StringVar(value="")
+        self.start_month = tk.StringVar(value="")
+        self.start_day = tk.StringVar(value="")
+        self.start_hour = tk.StringVar(value="")
+
+        self.end_year = tk.StringVar(value="")
+        self.end_month = tk.StringVar(value="")
+        self.end_day = tk.StringVar(value="")
+        self.end_hour = tk.StringVar(value="")
 
         self.build_ui()
         self.poll_log_queue()
@@ -81,20 +98,48 @@ class YanniGuiApp:
         settings_frame.pack(fill="x", **pad)
 
         tk.Label(settings_frame, text="Gmail search query:").grid(row=0, column=0, sticky="w", **pad)
-        tk.Entry(settings_frame, textvariable=self.gmail_query, width=80).grid(row=0, column=1, columnspan=3, sticky="we", **pad)
+        tk.Entry(settings_frame, textvariable=self.gmail_query, width=78).grid(row=0, column=1, columnspan=3, sticky="we", **pad)
 
         tk.Label(settings_frame, text="Max emails:").grid(row=1, column=0, sticky="w", **pad)
         tk.Entry(settings_frame, textvariable=self.max_emails, width=10).grid(row=1, column=1, sticky="w", **pad)
 
-        tk.Label(settings_frame, text="Output folder:").grid(row=2, column=0, sticky="w", **pad)
-        tk.Entry(settings_frame, textvariable=self.output_folder, width=65).grid(row=2, column=1, columnspan=2, sticky="we", **pad)
-        tk.Button(settings_frame, text="Choose Folder", command=self.choose_output_folder).grid(row=2, column=3, **pad)
+        self.add_datetime_dropdowns(
+            settings_frame,
+            row=1,
+            label="Start:",
+            year_var=self.start_year,
+            month_var=self.start_month,
+            day_var=self.start_day,
+            hour_var=self.start_hour
+        )
 
-        tk.Label(settings_frame, text="Credentials file:").grid(row=3, column=0, sticky="w", **pad)
-        tk.Entry(settings_frame, textvariable=self.credentials_file, width=35).grid(row=3, column=1, sticky="w", **pad)
+        self.add_datetime_dropdowns(
+            settings_frame,
+            row=2,
+            label="End:",
+            year_var=self.end_year,
+            month_var=self.end_month,
+            day_var=self.end_day,
+            hour_var=self.end_hour
+        )
 
-        tk.Label(settings_frame, text="Token file:").grid(row=3, column=2, sticky="e", **pad)
-        tk.Entry(settings_frame, textvariable=self.token_file, width=30).grid(row=3, column=3, sticky="w", **pad)
+        tk.Button(settings_frame, text="Clear Date Range", command=self.clear_date_range).grid(row=2, column=1, sticky="w", **pad)
+
+        tk.Label(settings_frame, text="Output folder:").grid(row=3, column=0, sticky="w", **pad)
+        tk.Entry(settings_frame, textvariable=self.output_folder, width=65).grid(row=3, column=1, columnspan=2, sticky="we", **pad)
+        tk.Button(settings_frame, text="Choose Folder", command=self.choose_output_folder).grid(row=3, column=3, **pad)
+
+        tk.Label(settings_frame, text="Credentials file:").grid(row=4, column=0, sticky="w", **pad)
+        tk.Entry(settings_frame, textvariable=self.credentials_file, width=35).grid(row=4, column=1, sticky="w", **pad)
+
+        tk.Label(settings_frame, text="Token file:").grid(row=4, column=2, sticky="e", **pad)
+        tk.Entry(settings_frame, textvariable=self.token_file, width=30).grid(row=4, column=3, sticky="w", **pad)
+
+        help_text = (
+            "Date range is optional. Leave Start or End blank to ignore that side of the range. "
+            "Blank hour means Start = 12 AM and End = full selected day."
+        )
+        tk.Label(settings_frame, text=help_text, fg="gray").grid(row=5, column=0, columnspan=4, sticky="w", padx=10, pady=(0, 8))
 
         button_frame = tk.Frame(self.root)
         button_frame.pack(fill="x", padx=10, pady=8)
@@ -115,6 +160,24 @@ class YanniGuiApp:
         self.log("This GUI calls your existing yanni_email_app.py file.")
         self.log("Gmail scope is read-only. Files are downloaded locally to the output folder.")
 
+    def add_datetime_dropdowns(self, parent, row, label, year_var, month_var, day_var, hour_var):
+        tk.Label(parent, text=label).grid(row=row, column=2, sticky="e", padx=10, pady=5)
+
+        frame = tk.Frame(parent)
+        frame.grid(row=row, column=3, sticky="w", padx=10, pady=5)
+
+        ttk.Combobox(frame, textvariable=year_var, values=self.year_options, width=6, state="readonly").pack(side="left")
+        tk.Label(frame, text="Year").pack(side="left", padx=(2, 8))
+
+        ttk.Combobox(frame, textvariable=month_var, values=self.month_options, width=4, state="readonly").pack(side="left")
+        tk.Label(frame, text="Month").pack(side="left", padx=(2, 8))
+
+        ttk.Combobox(frame, textvariable=day_var, values=self.day_options, width=4, state="readonly").pack(side="left")
+        tk.Label(frame, text="Day").pack(side="left", padx=(2, 8))
+
+        ttk.Combobox(frame, textvariable=hour_var, values=self.hour_options, width=4, state="readonly").pack(side="left")
+        tk.Label(frame, text="Hour").pack(side="left", padx=(2, 0))
+
     def log(self, message):
         self.log_queue.put(str(message))
 
@@ -130,6 +193,14 @@ class YanniGuiApp:
 
     def clear_log(self):
         self.log_box.delete("1.0", "end")
+
+    def clear_date_range(self):
+        for var in [
+            self.start_year, self.start_month, self.start_day, self.start_hour,
+            self.end_year, self.end_month, self.end_day, self.end_hour
+        ]:
+            var.set("")
+        self.log("Date range cleared.")
 
     def choose_output_folder(self):
         folder = filedialog.askdirectory(initialdir=self.output_folder.get())
@@ -192,6 +263,83 @@ class YanniGuiApp:
             self.log(f"Could not check connected Gmail: {e}")
             messagebox.showerror("Check failed", str(e))
 
+    def selected_datetime(self, label, year_var, month_var, day_var, hour_var, is_end=False):
+        year = year_var.get().strip()
+        month = month_var.get().strip()
+        day = day_var.get().strip()
+        hour = hour_var.get().strip()
+
+        selected = [year, month, day, hour]
+        has_any = any(selected)
+
+        if not has_any:
+            return None
+
+        if not year or not month or not day:
+            raise ValueError(f"{label} must include Year, Month, and Day.")
+
+        hour_value = int(hour) if hour else 0
+
+        try:
+            dt = datetime(int(year), int(month), int(day), hour_value, 0, 0)
+        except ValueError:
+            raise ValueError(f"{label} is not a valid date.")
+
+        if is_end:
+            if hour:
+                dt = dt + timedelta(hours=1)
+            else:
+                dt = dt + timedelta(days=1)
+
+        return dt
+
+    def format_selection(self, label, year_var, month_var, day_var, hour_var):
+        year = year_var.get().strip()
+        month = month_var.get().strip()
+        day = day_var.get().strip()
+        hour = hour_var.get().strip()
+
+        if not any([year, month, day, hour]):
+            return f"{label}: no limit"
+
+        return f"{label}: {year or '????'}-{month or '??'}-{day or '??'} {hour or 'all day'}"
+
+    def build_effective_gmail_query(self):
+        base_query = self.gmail_query.get().strip()
+        parts = []
+
+        if base_query:
+            parts.append(base_query)
+
+        start_dt = self.selected_datetime(
+            "Start",
+            self.start_year,
+            self.start_month,
+            self.start_day,
+            self.start_hour,
+            is_end=False
+        )
+
+        end_dt = self.selected_datetime(
+            "End",
+            self.end_year,
+            self.end_month,
+            self.end_day,
+            self.end_hour,
+            is_end=True
+        )
+
+        if start_dt:
+            parts.append(f"after:{int(start_dt.timestamp())}")
+
+        if end_dt:
+            parts.append(f"before:{int(end_dt.timestamp())}")
+
+        if start_dt and end_dt and start_dt >= end_dt:
+            raise ValueError("Start date/time must be before end date/time.")
+
+        return " ".join(parts)
+
     def run_custom(self):
         try:
             limit = int(self.max_emails.get())
@@ -219,11 +367,25 @@ class YanniGuiApp:
             messagebox.showerror("Missing Gmail account", "Enter the expected Gmail account first.")
             return
 
+        try:
+            effective_query = self.build_effective_gmail_query()
+        except ValueError as e:
+            messagebox.showerror("Invalid date range", str(e))
+            return
+
+        date_summary = (
+            self.format_selection("Start", self.start_year, self.start_month, self.start_day, self.start_hour)
+            + "\n"
+            + self.format_selection("End", self.end_year, self.end_month, self.end_day, self.end_hour)
+        )
+
         confirm = messagebox.askyesno(
             "Confirm Gmail Read",
             f"This will read Gmail using read-only access.\n\n"
             f"Expected account:\n{expected}\n\n"
             f"Maximum emails:\n{limit}\n\n"
+            f"Date range:\n{date_summary}\n\n"
+            f"Final Gmail query:\n{effective_query}\n\n"
             f"Output folder:\n{output}\n\n"
             f"Continue?"
         )
@@ -232,10 +394,10 @@ class YanniGuiApp:
             self.log("Run cancelled before starting.")
             return
 
-        worker = threading.Thread(target=self.run_worker, args=(limit,), daemon=True)
+        worker = threading.Thread(target=self.run_worker, args=(limit, effective_query), daemon=True)
         worker.start()
 
-    def run_worker(self, limit):
+    def run_worker(self, limit, effective_query):
         self.running = True
 
         try:
@@ -252,7 +414,7 @@ class YanniGuiApp:
                 "--confirm-real",
                 "--credentials", str(credentials_path),
                 "--token", str(token_path),
-                "--gmail-query", self.gmail_query.get(),
+                "--gmail-query", effective_query,
                 "--max-emails", str(limit),
                 "--expected-account", self.expected_account.get(),
                 "--output", str(output_path),
@@ -260,6 +422,9 @@ class YanniGuiApp:
 
             self.log("")
             self.log("Starting Yanni Email app...")
+            self.log("Effective Gmail query:")
+            self.log(effective_query)
+            self.log("")
             self.log("Command:")
             self.log(subprocess.list2cmdline(cmd))
             self.log("")
