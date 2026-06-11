@@ -5,3 +5,9 @@ client_secret*.json
 .env
 __pycache__/
 *.pyc
+
+# Local Gmail OAuth files - DO NOT UPLOAD TO GITHUB
+credentials.json
+token*.json
+client_secret*.json
+TEST_OUTPUT/
