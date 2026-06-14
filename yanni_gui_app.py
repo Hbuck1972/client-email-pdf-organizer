@@ -161,23 +161,22 @@ class YanniGuiApp:
         self.log("Gmail scope is read-only. Files are downloaded locally to the output folder.")
 
     def add_datetime_dropdowns(self, parent, row, label, year_var, month_var, day_var, hour_var):
-        tk.Label(parent, text=label).grid(row=row, column=2, sticky="e", padx=10, pady=5)
+        tk.Label(parent, text=label).grid(row=row, column=2, sticky="e", padx=5, pady=5)
 
         frame = tk.Frame(parent)
         frame.grid(row=row, column=3, sticky="w", padx=10, pady=5)
 
-        ttk.Combobox(frame, textvariable=year_var, values=self.year_options, width=6, state="readonly").pack(side="left")
-        tk.Label(frame, text="Year").pack(side="left", padx=(2, 8))
+        tk.Label(frame, text="Year").pack(side="left", padx=(2, 2))
+        ttk.Combobox(frame, textvariable=year_var, values=self.year_options, width=6).pack(side="left", padx=(0, 8))
 
-        ttk.Combobox(frame, textvariable=month_var, values=self.month_options, width=4, state="readonly").pack(side="left")
-        tk.Label(frame, text="Month").pack(side="left", padx=(2, 8))
+        tk.Label(frame, text="Month").pack(side="left", padx=(2, 2))
+        ttk.Combobox(frame, textvariable=month_var, values=self.month_options, width=4).pack(side="left", padx=(0, 8))
 
-        ttk.Combobox(frame, textvariable=day_var, values=self.day_options, width=4, state="readonly").pack(side="left")
-        tk.Label(frame, text="Day").pack(side="left", padx=(2, 8))
+        tk.Label(frame, text="Day").pack(side="left", padx=(2, 2))
+        ttk.Combobox(frame, textvariable=day_var, values=self.day_options, width=4).pack(side="left", padx=(0, 8))
 
-        ttk.Combobox(frame, textvariable=hour_var, values=self.hour_options, width=4, state="readonly").pack(side="left")
-        tk.Label(frame, text="Hour").pack(side="left", padx=(2, 0))
-
+        tk.Label(frame, text="Hour").pack(side="left", padx=(2, 2))
+        ttk.Combobox(frame, textvariable=hour_var, values=self.hour_options, width=4).pack(side="left", padx=(0, 8))
     def log(self, message):
         self.log_queue.put(str(message))
 
