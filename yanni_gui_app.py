@@ -177,6 +177,7 @@ class YanniGuiApp:
 
         tk.Label(frame, text="Hour").pack(side="left", padx=(2, 2))
         ttk.Combobox(frame, textvariable=hour_var, values=self.hour_options, width=4).pack(side="left", padx=(0, 8))
+        
     def log(self, message):
         self.log_queue.put(str(message))
 
