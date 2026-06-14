@@ -3,6 +3,7 @@ import sys
 import queue
 import threading
 import subprocess
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 import tkinter as tk
@@ -30,6 +31,8 @@ def resolve_local_path(value):
 class YanniGuiApp:
     def __init__(self, root):
         self.root = root
+        self.settings_file = APP_DIR / "yanni_gui_settings.json"
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.title("Yanni Email PDF Organizer")
         self.root.geometry("980x700")
 
@@ -60,6 +63,8 @@ class YanniGuiApp:
         self.end_month = tk.StringVar(value="")
         self.end_day = tk.StringVar(value="")
         self.end_hour = tk.StringVar(value="")
+
+        self.load_datetime_settings()
 
         self.build_ui()
         self.poll_log_queue()
@@ -177,7 +182,51 @@ class YanniGuiApp:
 
         tk.Label(frame, text="Hour").pack(side="left", padx=(2, 2))
         ttk.Combobox(frame, textvariable=hour_var, values=self.hour_options, width=4).pack(side="left", padx=(0, 8))
-        
+
+    def load_datetime_settings(self):
+        if not self.settings_file.exists():
+            return
+
+        try:
+            with open(self.settings_file, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+
+            self.start_year.set(settings.get("start_year", ""))
+            self.start_month.set(settings.get("start_month", ""))
+            self.start_day.set(settings.get("start_day", ""))
+            self.start_hour.set(settings.get("start_hour", ""))
+
+            self.end_year.set(settings.get("end_year", ""))
+            self.end_month.set(settings.get("end_month", ""))
+            self.end_day.set(settings.get("end_day", ""))
+            self.end_hour.set(settings.get("end_hour", ""))
+
+        except Exception as e:
+            self.log(f"Could not load saved date/time settings: {e}")
+
+    def save_datetime_settings(self):
+        settings = {
+            "start_year": self.start_year.get(),
+            "start_month": self.start_month.get(),
+            "start_day": self.start_day.get(),
+            "start_hour": self.start_hour.get(),
+            "end_year": self.end_year.get(),
+            "end_month": self.end_month.get(),
+            "end_day": self.end_day.get(),
+            "end_hour": self.end_hour.get(),
+        }
+
+        try:
+            with open(self.settings_file, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2)
+
+        except Exception as e:
+            self.log(f"Could not save date/time settings: {e}")
+
+    def on_close(self):
+        self.save_datetime_settings()
+        self.root.destroy()
+
     def log(self, message):
         self.log_queue.put(str(message))
 
@@ -355,6 +404,8 @@ class YanniGuiApp:
         if self.running:
             messagebox.showwarning("Already running", "The app is already running.")
             return
+        
+        self.save_datetime_settings()
 
         if not CLI_SCRIPT.exists():
             messagebox.showerror("Missing file", f"Could not find:\n{CLI_SCRIPT}")
