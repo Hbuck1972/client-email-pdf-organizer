@@ -3,6 +3,8 @@ import base64
 import json
 import os
 import re
+from io import BytesIO
+from pypdf import PdfReader, PdfWriter
 from dataclasses import dataclass, asdict
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -587,6 +589,97 @@ def save_manifest(base_output: Path, records: List[TimeshareRecord]):
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump([asdict(r) for r in records], f, indent=2)
 
+def unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+
+    counter = 2
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+
+    while True:
+        candidate = parent / f"{stem} ({counter}){suffix}"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def write_pdf_pages(reader: PdfReader, page_indexes: List[int], output_path: Path):
+    writer = PdfWriter()
+
+    for page_index in page_indexes:
+        writer.add_page(reader.pages[page_index])
+
+    output_path = unique_path(output_path)
+
+    with open(output_path, "wb") as f:
+        writer.write(f)
+
+    return output_path
+
+
+def split_spoa_sdd_pdf_if_needed(folder: Path, attachment_filename: str, attachment_bytes: bytes, record: TimeshareRecord) -> bool:
+    if not attachment_filename.lower().endswith(".pdf"):
+        return False
+
+    try:
+        reader = PdfReader(BytesIO(attachment_bytes))
+    except Exception:
+        return False
+
+    page_texts = []
+
+    for page in reader.pages:
+        try:
+            page_texts.append(page.extract_text() or "")
+        except Exception:
+            page_texts.append("")
+
+    spoa_start = None
+    sdd_start = None
+    certificate_start = None
+
+    for i, text in enumerate(page_texts):
+        upper = text.upper()
+
+        if spoa_start is None and "SPECIAL POWER OF ATTORNEY" in upper:
+            spoa_start = i
+
+        if sdd_start is None and "STRATEGIC DEFAULT DISCLOSURE" in upper:
+            sdd_start = i
+
+        if certificate_start is None and (
+            "CERTIFICATE OF COMPLETION" in upper
+            or "ELECTRONIC RECORD AND SIGNATURE DISCLOSURE" in upper
+        ):
+            certificate_start = i
+
+    if spoa_start is None or sdd_start is None:
+        return False
+
+    prefix = safe_filename(f"{record.owner_name} - {record.resort_name}")
+
+    # SPOA pages: from SPOA start up to page before SDD
+    spoa_pages = list(range(spoa_start, sdd_start))
+
+    # SDD pages: from SDD start up to certificate/disclosure pages, or end of PDF
+    sdd_end = certificate_start if certificate_start is not None and certificate_start > sdd_start else len(reader.pages)
+    sdd_pages = list(range(sdd_start, sdd_end))
+
+    if spoa_pages:
+        spoa_name = f"{prefix} - SPOA - Special Power of Attorney.pdf"
+        spoa_path = folder / safe_filename(spoa_name)
+        saved_spoa = write_pdf_pages(reader, spoa_pages, spoa_path)
+        print(f"Split SPOA PDF: {saved_spoa.name}")
+
+    if sdd_pages:
+        sdd_name = f"{prefix} - SDD - Strategic Default Disclosure.pdf"
+        sdd_path = folder / safe_filename(sdd_name)
+        saved_sdd = write_pdf_pages(reader, sdd_pages, sdd_path)
+        print(f"Split SDD PDF: {saved_sdd.name}")
+
+    return True
 
 def copy_attachment_to_record_folder(
     folder: Path,
@@ -594,22 +687,24 @@ def copy_attachment_to_record_folder(
     attachment_bytes: bytes,
     record: TimeshareRecord
 ):
+    did_split = split_spoa_sdd_pdf_if_needed(
+        folder=folder,
+        attachment_filename=attachment_filename,
+        attachment_bytes=attachment_bytes,
+        record=record
+    )
+
+    if did_split:
+        return
+
     original_name = safe_filename(attachment_filename)
     prefix = safe_filename(f"{record.owner_name} - {record.resort_name}")
 
     final_name = f"{prefix} - {original_name}"
-    final_path = folder / final_name
-
-    counter = 2
-    while final_path.exists():
-        stem = Path(final_name).stem
-        suffix = Path(final_name).suffix
-        final_path = folder / f"{stem} ({counter}){suffix}"
-        counter += 1
+    final_path = unique_path(folder / final_name)
 
     with open(final_path, "wb") as f:
         f.write(attachment_bytes)
-
 
 # -----------------------------
 # Real Gmail Processing
